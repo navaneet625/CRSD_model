@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 from .crsd_cell import CRSDCell
 
@@ -9,14 +10,12 @@ class CRSDBlock(nn.Module):
     def forward(self, x_seq):
         # x_seq: (T, d_x)
         T = x_seq.shape[0]
-        states = []
         for cell in self.layers:
-            h = torch.zeros(cell.d_h)
-            reservoirs = [torch.zeros(d) for d in cell.res_dims]
+            h = x_seq.new_zeros(cell.d_h)
+            reservoirs = [x_seq.new_zeros(d) for d in cell.res_dims]
             out_seq = []
             for t in range(T):
                 h, reservoirs = cell(x_seq[t], h, reservoirs)
                 out_seq.append(h)
             x_seq = torch.stack(out_seq, dim=0)
-            states.append(x_seq)
         return x_seq

@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from .crsd_memory import HebbianMemory, EpisodicBuffer
 
 class CRSDCell(nn.Module):
-    def __init__(self, d_x, d_h, res_dims, d_k, d_v, mem_slots=64, device='cpu'):
+    def __init__(self, d_x, d_h, res_dims, d_k, d_v, mem_slots=64):
         super().__init__()
         self.d_x = d_x
         self.d_h = d_h
@@ -12,14 +12,13 @@ class CRSDCell(nn.Module):
         self.total_res = sum(res_dims)
         self.d_k = d_k
         self.d_v = d_v
-        self.device = device
 
         # reservoirs
         self.res_Wx = nn.ModuleList([nn.Linear(d_x, d) for d in res_dims])
         self.res_Wh = nn.ModuleList([nn.Linear(d_h, d) for d in res_dims])
         self.res_logit_alpha = nn.Parameter(torch.randn(len(res_dims)))
 
-        # base
+        # base transformations
         self.A = nn.Linear(d_h, d_h, bias=False)
         self.B = nn.Linear(self.total_res, d_h, bias=False)
         self.U = nn.Linear(d_x, d_h)
@@ -33,13 +32,14 @@ class CRSDCell(nn.Module):
         self.recall_map = nn.Linear(d_v, d_h)
 
         # memory modules
-        self.hebb = HebbianMemory(d_k, d_v, device=device)
-        self.buffer = EpisodicBuffer(mem_slots, d_k, d_v, device=device)
+        # Note: Make sure to pass correct device when creating the cell, or move model to device.
+        self.hebb = HebbianMemory(d_k, d_v)
+        self.buffer = EpisodicBuffer(mem_slots, d_k, d_v)
 
     def forward(self, x, h_prev, reservoirs):
         # reservoirs: list of tensors
         res_outs = []
-        for i,(r_prev, Wx, Wh) in enumerate(zip(reservoirs, self.res_Wx, self.res_Wh)):
+        for i, (r_prev, Wx, Wh) in enumerate(zip(reservoirs, self.res_Wx, self.res_Wh)):
             alpha = torch.sigmoid(self.res_logit_alpha[i])
             inp = Wx(x) + Wh(h_prev)
             r_new = alpha * r_prev + (1 - alpha) * torch.tanh(inp)
@@ -51,13 +51,15 @@ class CRSDCell(nn.Module):
         k = self.key_proj(torch.cat([r_cat, x], dim=-1))
         v = self.val_proj(h_tilde.detach())
 
-        # write
-        self.buffer.write(k.detach(), v.detach())
-        self.hebb.update(k.detach(), v.detach())
 
-        # recall
+        with torch.no_grad():
+            self.buffer.write(k.detach(), v.detach())
+            self.hebb.update(k.detach(), v.detach())
+
+
+        # recall from memory
         c = F.normalize(k, dim=-1)
-        v_buf, alpha = self.buffer.recall(c)
+        v_buf, _alpha = self.buffer.recall(c)
         v_hebb = self.hebb.recall(c)
         v_hat = 0.5 * v_buf + 0.5 * v_hebb
 

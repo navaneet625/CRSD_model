@@ -14,14 +14,17 @@ class CRSDSequence(nn.Module):
         if ids.dim() == 1:
             ids = ids.unsqueeze(0)
         B, T = ids.shape
-        emb = self.emb(ids)  # (B,T,emb)
+        device = ids.device
+        emb = self.emb(ids)  # (B, T, emb_dim) on the same device as ids
         logits = []
         for b in range(B):
-            h = torch.zeros(self.cell.d_h)
-            reservoirs = [torch.zeros(d) for d in self.cell.res_dims]
+            # Initialize hidden state and reservoirs on correct device
+            h = torch.zeros(self.cell.d_h, device=device)
+            reservoirs = [torch.zeros(d, device=device) for d in self.cell.res_dims]
             for t in range(T):
-                x = emb[b,t]
+                x = emb[b, t]   # embedding for batch b at time t
                 h, reservoirs = self.cell(x, h, reservoirs)
                 logits.append(self.out(h))
-        logits = torch.stack(logits, dim=0)
+        # Stack and reshape to (B, T, vocab_size)
+        logits = torch.stack(logits, dim=0).view(B, T, -1)
         return logits
