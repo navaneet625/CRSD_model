@@ -1,0 +1,17 @@
+model:
+d_x: 32
+d_h: 32
+res_dims: [8,8]
+d_k: 16
+d_v: 16
+mem_slots: 16
+
+
+train:
+batch_size: 2
+lr: 1e-3
+epochs: 3
+
+
+data:
+max_len: 32
