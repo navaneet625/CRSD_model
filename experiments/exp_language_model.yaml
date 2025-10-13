@@ -1,26 +1,25 @@
 # ===============================================
-#   CRSD Large-Scale Configuration
-#   For 100–500 MB text or sequential datasets
+# ⚡ CRSD Lightweight Configuration (Fast Mode)
+# For quick experiments on small datasets (1–10 MB)
 # ===============================================
 
 model:
-  # 🔸 Larger hidden & memory dimensions
-  d_x: 128             # embedding dimension
-  d_h: 256             # hidden dimension for CRSDCell
-  res_dims: [64, 64, 64]  # more reservoir layers for richer dynamics
-  d_k: 64              # key dimension for memory
-  d_v: 64              # value dimension for memory
-  mem_slots: 256       # larger episodic buffer to store longer history
+  d_x: 32  
+  d_h: 32  
+  res_dims: [8, 8]
+  d_k: 8 
+  d_v: 8 
+  mem_slots: 32 
 
 train:
-  batch_size: 4        # keep small if GPU memory is limited
-  lr: 0.0003           # smaller LR for stable long training
-  epochs: 5            # 5 full passes are usually enough for large data
-  grad_clip: 1.0       # gradient clipping for stability
-  checkpoint_every: 1  # save model checkpoint every epoch
+  batch_size: 64
+  lr: 0.0001 
+  epochs: 25 
+  grad_clip: 1.0
+  checkpoint_every: 5
 
 data:
-  # 🔸 Larger sequence and optional dataset path
-  dataset_path: "data/enwik8_10M.txt"   # or your own large dataset file
-  max_len: 512                      # sequence length per sample
-  num_workers: 4                    # parallel data loading
+  dataset_path: "/data/enwik8_10M.txt"
+  max_len: 256   
+  num_workers: 2
+  data_mode: char
