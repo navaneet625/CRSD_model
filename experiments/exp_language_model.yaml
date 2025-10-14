@@ -1,25 +1,25 @@
 # ===============================================
-# ⚡ CRSD Lightweight Configuration (Fast Mode)
-# For quick experiments on small datasets (1–10 MB)
+# ⚡ CRSD Optimized Configuration for 10MB Text
+# Balanced for stability and reasonable runtime
 # ===============================================
 
 model:
-  d_x: 32  
-  d_h: 32  
-  res_dims: [8, 8]
-  d_k: 8 
-  d_v: 8 
-  mem_slots: 32 
+  d_x: 128          # embedding dimension
+  d_h: 256          # hidden size
+  res_dims: [64, 64, 64]   # deeper residual structure
+  d_k: 64           # key dimension
+  d_v: 64           # value dimension
+  mem_slots: 256    # memory slots for recall (larger for longer context)
 
 train:
-  batch_size: 64
-  lr: 0.0001 
-  epochs: 25 
+  batch_size: 128       # fits in GPU memory comfortably
+  lr: 0.0003           # slightly higher learning rate
+  epochs: 10            # enough to converge on 10MB
   grad_clip: 1.0
-  checkpoint_every: 5
+  checkpoint_every: 1  # save every epoch
 
 data:
   dataset_path: "/data/enwik8_10M.txt"
-  max_len: 256   
+  max_len: 512         # character context length
   num_workers: 2
   data_mode: char

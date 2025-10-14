@@ -30,11 +30,15 @@ class LLMTokenizer:
                 eos_token=self.EOS_TOKEN,
             )
 
-            # Safety: ensure all IDs exist
             self._ensure_special_ids()
 
             vocab = self.tokenizer.get_vocab()
             self.inv = {v: k for k, v in vocab.items()}
+
+            # Debug info
+            print(f"📘 Loaded vocab size: {len(vocab)}")
+            print("🔢 Sample tokens:", list(vocab.items())[:10])
+            print(f"🆔 Special IDs → PAD: {self.tokenizer.pad_token_id}, BOS: {self.tokenizer.bos_token_id}, EOS: {self.tokenizer.eos_token_id}")
 
         else:
             print("⚠️ Tokenizer not loaded. Must be trained first.")
@@ -44,7 +48,6 @@ class LLMTokenizer:
         if self.tokenizer.pad_token_id is None:
             self.tokenizer.add_special_tokens({"pad_token": self.PAD_TOKEN})
         if self.tokenizer.unk_token_id is None:
-            print("⚠️ Adding missing UNK token ID...")
             self.tokenizer.add_special_tokens({"unk_token": self.UNK_TOKEN})
         if self.tokenizer.bos_token_id is None:
             self.tokenizer.add_special_tokens({"bos_token": self.BOS_TOKEN})
@@ -52,29 +55,19 @@ class LLMTokenizer:
             self.tokenizer.add_special_tokens({"eos_token": self.EOS_TOKEN})
 
     def train_and_save(self, files, vocab_size=50000, save_path="llm_tokenizer.json"):
-        """
-        Trains a new SentencePiece Unigram tokenizer and wraps it
-        into a PreTrainedTokenizerFast for direct Hugging Face use.
-        """
         print(f"⚙️ Training new SentencePiece tokenizer with vocab size: {vocab_size}")
 
         tokenizer = SentencePieceUnigramTokenizer()
-
         tokenizer.train(
             files=files,
             vocab_size=vocab_size,
             special_tokens=self.SPECIAL_TOKENS,
             show_progress=True,
         )
-
-        # ✅ Correct: add special tokens as a list, not dict
         tokenizer.add_special_tokens(self.SPECIAL_TOKENS)
-
-        # Save the tokenizer
         tokenizer.save(save_path)
         print(f"✅ Tokenizer saved to: {save_path}")
 
-        # Reload with PreTrainedTokenizerFast
         self.tokenizer = PreTrainedTokenizerFast(
             tokenizer_file=save_path,
             pad_token=self.PAD_TOKEN,
@@ -82,27 +75,26 @@ class LLMTokenizer:
             bos_token=self.BOS_TOKEN,
             eos_token=self.EOS_TOKEN,
         )
-
         self._ensure_special_ids()
-
-        # Build inverse vocab
         self.inv = {v: k for k, v in self.tokenizer.get_vocab().items()}
         self.vocab_file = save_path
 
         print("📘 Reloaded tokenizer and verified special token IDs.")
+        print(f"🆔 PAD={self.tokenizer.pad_token_id}, BOS={self.tokenizer.bos_token_id}, EOS={self.tokenizer.eos_token_id}")
 
     def encode(self, text, add_special_tokens=True):
-        """Encodes text into token IDs."""
         if not self.tokenizer:
             raise ValueError("Tokenizer not initialized. Train or load first.")
-        return self.tokenizer.encode(text, add_special_tokens=add_special_tokens)
+        ids = self.tokenizer.encode(text, add_special_tokens=add_special_tokens)
+        print(f"🧩 [DEBUG] Encoding sample: '{text[:50]}...' → {ids[:20]}")
+        return ids
 
     def decode(self, ids):
-        """Decodes token IDs back to text."""
         if not self.tokenizer:
             raise ValueError("Tokenizer not initialized. Train or load first.")
-        return self.tokenizer.decode(ids, skip_special_tokens=True)
+        text = self.tokenizer.decode(ids, skip_special_tokens=True)
+        print(f"🔡 [DEBUG] Decoding sample IDs {ids[:20]} → '{text[:80]}'")
+        return text
 
     def vocab_size(self):
-        """Returns the size of the vocabulary."""
         return self.tokenizer.vocab_size if self.tokenizer else 0

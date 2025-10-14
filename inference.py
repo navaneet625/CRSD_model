@@ -1,4 +1,4 @@
-import os
+import os,sys
 import torch
 import torch.nn.functional as F
 from models.crsd_seq import CRSDSequence
@@ -10,52 +10,27 @@ def generate_text(model, tokenizer, device, prompt="The ", max_new_tokens=200, t
     """Autoregressive text generation from CRSD model."""
     model.eval()
     
-    # 🚨 FIX 1: Use the tokenizer instance to encode the prompt.
-    # The tokenizer object (tok) is callable and handles the encoding.
-    
-    # Assuming tokenizer is callable and returns a list of integer IDs (the simplest case)
-    # The tokenizer should handle breaking the prompt string into its tokens/subwords.
-    
-    # To be safe, we use the method that the LLMTokenizer should implement:
-    # 1. Get the list of IDs from the tokenizer's encoding method
-    # 2. Extract the IDs from the encoded output (assuming the LLMTokenizer is a wrapper)
-    
-    # We will assume that the LLMTokenizer instance is callable and returns a list of IDs.
     try:
-        input_ids = tokenizer(prompt)
-    except Exception:
-        # Fallback: If LLMTokenizer is not callable, try the internal tokenizer's method
-        input_ids = tokenizer.tokenizer.encode(prompt).ids
-        
-    # Check if a simple list of integers was returned
-    if not isinstance(input_ids, list):
-        # Handle case where tokenizer returns a tensor/dict (common in HuggingFace)
-        if isinstance(input_ids, dict) and 'input_ids' in input_ids:
-            input_ids = input_ids['input_ids'].tolist()
-        elif isinstance(input_ids, torch.Tensor):
-            input_ids = input_ids.squeeze().tolist()
-        # If it's still not a list of IDs, we might have a deeper issue, but we proceed.
+        input_ids = tokenizer.tokenizer.encode(prompt) # 👈 REMOVED .ids
+    except AttributeError:
+        input_ids = tokenizer.tokenizer.encode(prompt)
         
     
-    # Convert list of Python ints to a PyTorch tensor for the model
+    # Convert list of Python ints to a PyTorch tensor
     input_tensor = torch.tensor([input_ids], dtype=torch.long, device=device)
 
     print(f"🧩 Starting generation with prompt: '{prompt}'")
     for _ in range(max_new_tokens):
-        # 🚨 FIX 2 (Efficiency Improvement): Only pass the last part of the sequence 
-        # to the model for the next token prediction if the sequence length exceeds 
-        # the model's max context size (or to speed up generation).
-        # We will keep the full tensor for simplicity unless OOM occurs.
+        # ... (rest of the generation logic is correct)
+        
         logits = model(input_tensor)  # (B, T, V)
         next_logits = logits[:, -1, :] / temperature
         probs = F.softmax(next_logits, dim=-1)
 
-        # Sample the next token ID
         next_id = torch.multinomial(probs, num_samples=1).item()
         
-        # 🚨 FIX 3: Get the character/token from the correct map. 
-        # Assuming the inverse map is stored in 'tokenizer.inv' based on the original code
-        next_token = tokenizer.inv.get(next_id, "<UNK>") # Use .get() for safety
+        # 🚨 NOTE: 'tokenizer.inv' is the inverse map (ID to token)
+        next_token = tokenizer.inv.get(next_id, "<UNK>") 
 
         # Stop early if we hit padding or invalid token
         if next_token in ["<PAD>", "<UNK>"]:
@@ -89,9 +64,7 @@ def main():
 
     # Build tokenizer
     tok = build_tokenizer(cfg["data"]["dataset_path"])
-    # 🚨 FIX: Vocab size is now accessed via the corrected method
     vocab_size = tok.vocab_size() 
-    print(f"📘 Loaded tokenizer with vocab size: {vocab_size}")
 
     # Load model
     model_cfg = cfg["model"]
@@ -105,7 +78,6 @@ def main():
     if os.path.exists(checkpoint_path):
         state_dict = torch.load(checkpoint_path, map_location=device)
         
-        # 2. Filter out keys that don't match the current model (e.g., buffers from previous runs)
         model_keys = model.state_dict().keys()
         filtered_state_dict = {
             k: v for k, v in state_dict.items() if k in model_keys

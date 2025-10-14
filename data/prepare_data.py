@@ -9,29 +9,26 @@ SENTS = [
     "The dog barks at the quick fox, but a fast brown animal leaps above a sleepy canine.",
     "An LLM is a powerful tool for research purposes.",
 ]
-
-# ============================================================
-# ✅ Minimal built-in Character-level Tokenizer
-# ============================================================
 class CharTokenizer:
     """
-    Simple character-level tokenizer.
-    Maps each unique character to an integer ID.
+    Byte-level character tokenizer (robust to any Unicode input).
+    Each unique byte (0–255) becomes a token ID.
     """
     def __init__(self, text_file):
         with open(text_file, "rb") as f:
             data = f.read()
-        chars = [bytes([i]) for i in range(256)]
-        self.vocab = {ch: i for i, ch in enumerate(chars)}
-        self.inv = {i: ch for ch, i in self.vocab.items()}
+
+        # Build byte-level vocab (0–255)
+        self.vocab = {bytes([i]): i for i in range(256)}
+        self.inv = {i: bytes([i]) for i in range(256)}
 
         # Add special tokens
         self.pad_token = "<PAD>"
         self.bos_token = "<BOS>"
         self.eos_token = "<EOS>"
-        self.pad_id = len(self.vocab)
-        self.bos_id = len(self.vocab) + 1
-        self.eos_id = len(self.vocab) + 2
+        self.pad_id = 256
+        self.bos_id = 257
+        self.eos_id = 258
 
         self.vocab[self.pad_token] = self.pad_id
         self.vocab[self.bos_token] = self.bos_id
@@ -41,38 +38,40 @@ class CharTokenizer:
         self.inv[self.bos_id] = self.bos_token
         self.inv[self.eos_id] = self.eos_token
 
+        print(f"📘 CharTokenizer initialized | vocab_size={self.vocab_size()}")
+        print(f"🆔 Special IDs: PAD={self.pad_id}, BOS={self.bos_id}, EOS={self.eos_id}")
+
     def encode(self, text, add_special_tokens=True):
-        ids = [self.vocab.get(ch, self.pad_id) for ch in text]
+        """Convert text (any Unicode) to byte IDs safely."""
+        text_bytes = text.encode("utf-8", errors="replace")  # Replace unknowns with '?'
+        ids = [b for b in text_bytes]
         if add_special_tokens:
             ids = [self.bos_id] + ids + [self.eos_id]
+        print(f"🧩 [DEBUG] Encoded {len(ids)} bytes → first 20 tokens: {ids[:20]}")
         return ids
 
     def decode(self, ids):
-        return "".join(self.inv.get(i, "") for i in ids)
+        """Convert byte IDs back to readable text."""
+        bytes_seq = bytearray()
+        for i in ids:
+            if i < 256:
+                bytes_seq.append(i)
+        text = bytes_seq.decode("utf-8", errors="replace")
+        print(f"🔡 [DEBUG] Decoded sample → '{text[:100]}'")
+        return text
 
     def vocab_size(self):
         return len(self.vocab)
 
-
-# ============================================================
-# ✅ Minimal built-in Word-level Tokenizer
-# ============================================================
 class WordTokenizer:
-    """
-    Simple word-level tokenizer.
-    Splits text using regex (\b\w+\b) and maps each unique word to an ID.
-    """
     def __init__(self, text_file):
         with open(text_file, "r", encoding="utf-8") as f:
             text = f.read().lower()
-
         words = re.findall(r"\b\w+\b", text)
         vocab = sorted(list(set(words)))
-
         self.word2id = {w: i for i, w in enumerate(vocab)}
         self.id2word = {i: w for w, i in self.word2id.items()}
 
-        # Add special tokens
         self.pad_token = "<PAD>"
         self.bos_token = "<BOS>"
         self.eos_token = "<EOS>"
@@ -80,32 +79,28 @@ class WordTokenizer:
         self.bos_id = len(vocab) + 1
         self.eos_id = len(vocab) + 2
 
+        print(f"📘 WordTokenizer initialized | vocab_size={self.vocab_size()}")
+        print(f"🆔 Special IDs: PAD={self.pad_id}, BOS={self.bos_id}, EOS={self.eos_id}")
+
     def encode(self, text, add_special_tokens=True):
         words = re.findall(r"\b\w+\b", text.lower())
         ids = [self.word2id.get(w, self.pad_id) for w in words]
         if add_special_tokens:
             ids = [self.bos_id] + ids + [self.eos_id]
+        print(f"🧩 [DEBUG] Encoding sample: {words[:10]} → {ids[:10]}")
         return ids
 
     def decode(self, ids):
-        return " ".join(self.id2word.get(i, "") for i in ids)
+        text = " ".join(self.id2word.get(i, "") for i in ids)
+        print(f"🔡 [DEBUG] Decoding IDs {ids[:10]} → '{text[:80]}'")
+        return text
 
     def vocab_size(self):
         return len(self.word2id) + 3
 
-
-# ============================================================
-# ✅ Tokenizer Builder (supports "char", "word", "subword")
-# ============================================================
 def build_tokenizer(dataset_path=None, vocab_size=50000, mode="subword"):
-    """
-    Build or load tokenizer for CRSD.
-    mode = "char", "word", or "subword"
-    """
-
     tokenizer_path = os.path.join(os.path.dirname(__file__), TOKENIZER_VOCAB_FILE)
 
-    # Character-level tokenizer
     if mode == "char":
         if dataset_path and os.path.exists(dataset_path):
             print(f"🔡 Building character-level tokenizer from: {dataset_path}")
@@ -119,7 +114,6 @@ def build_tokenizer(dataset_path=None, vocab_size=50000, mode="subword"):
             tok = CharTokenizer(tmp_file)
         print(f"📘 Character vocab size: {tok.vocab_size()}")
 
-    # Word-level tokenizer
     elif mode == "word":
         if dataset_path and os.path.exists(dataset_path):
             print(f"🪶 Building word-level tokenizer from: {dataset_path}")
@@ -128,8 +122,7 @@ def build_tokenizer(dataset_path=None, vocab_size=50000, mode="subword"):
         else:
             raise FileNotFoundError("Dataset not found for word-level tokenizer.")
 
-    # Subword tokenizer (SentencePiece)
-    else:
+    else:  # subword
         if os.path.exists(tokenizer_path):
             tok = LLMTokenizer(vocab_file=tokenizer_path)
         elif dataset_path and os.path.exists(dataset_path):
@@ -142,5 +135,14 @@ def build_tokenizer(dataset_path=None, vocab_size=50000, mode="subword"):
                 f"Cannot find tokenizer at {tokenizer_path} or dataset {dataset_path}"
             )
         print(f"📘 Loaded subword tokenizer with vocab size: {tok.vocab_size()}")
+
+    # 🔍 Final debug check
+    if dataset_path and os.path.exists(dataset_path):
+        with open(dataset_path, "r", encoding="utf-8") as f:
+            sample = f.read(300)
+        encoded = tok.encode(sample, add_special_tokens=False)
+        print(f"🧩 [DEBUG] build_tokenizer sample encode len={len(encoded)}, first 20 tokens={encoded[:20]}")
+        decoded = tok.decode(encoded[:100])
+        print(f"🔡 [DEBUG] build_tokenizer sample decode='{decoded[:120]}'")
 
     return tok

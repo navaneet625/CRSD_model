@@ -9,7 +9,7 @@ class CRSDCell(nn.Module):
         super().__init__()
         self.d_x, self.d_h = d_x, d_h
         self.res_dims = res_dims
-        self.R = sum(res_dims)
+        self.R = int(sum(res_dims))
 
         # single big reservoir projections
         self.Wx = nn.Linear(d_x, self.R, bias=True)
@@ -30,6 +30,7 @@ class CRSDCell(nn.Module):
         # runtime knobs
         self.mem_update_every = int(max(1, mem_update_every))
         self.mem_read_window = mem_read_window
+        self.mem_slots = int(mem_slots)
 
         self._heb = None
         self._buf = None
@@ -42,7 +43,6 @@ class CRSDCell(nn.Module):
                     nn.init.zeros_(m.bias)
 
         # ---- precompute a segment index to vectorize alpha (no .item())
-        # seg_index has length R, each entry tells which segment this coord belongs to
         seg_sizes = torch.tensor(res_dims, dtype=torch.long)
         seg_ids = torch.arange(len(res_dims), dtype=torch.long)
         seg_index = torch.repeat_interleave(seg_ids, seg_sizes)   # (R,)
@@ -55,11 +55,17 @@ class CRSDCell(nn.Module):
         return alpha_vec.unsqueeze(0).expand(B, -1)               # (B,R)
 
     def _ensure_mem(self, B, d_k, d_v, device):
+        # create or recreate memories when batch size changes
         if (self._heb is None) or (self._heb.H.size(0) != B):
-            self._heb = HebbianMemory(B, d_k, d_v).to(device)
-            self._buf = EpisodicBuffer(B, slots=64, d_k=d_k, d_v=d_v).to(device)
+            self._heb = HebbianMemory(B, d_k, d_v, memory_dtype=self._buf_dtype() if hasattr(self, "_buf_dtype") else torch.float32).to(device)
+            self._buf = EpisodicBuffer(B, slots=self.mem_slots, d_k=d_k, d_v=d_v, memory_dtype=self._heb.H.dtype).to(device)
+
+    def _buf_dtype(self):
+        # choose memory dtype (fallback to float32)
+        return torch.float32
 
     def forward(self, x_t, h_prev, r_prev, step, train_mode=True):
+        # x_t: (B,d_x), h_prev: (B,d_h), r_prev: (B,R)
         B = x_t.size(0)
         device = x_t.device
 
@@ -79,21 +85,20 @@ class CRSDCell(nn.Module):
         k = self.key_in(torch.cat([r_new, x_t], dim=-1))          # (B,d_k)
         v = self.val_in(h_tilde.detach())                         # (B,d_v)  (stop grad into memory)
 
-        # Ensure memories exist
+        # Ensure memories exist (and are on correct device)
         self._ensure_mem(B, k.size(-1), v.size(-1), device)
 
-        # ======== NEW ORDER: RECALL FIRST FROM SNAPSHOTS ========
-        # take detached snapshots to avoid version-counter conflicts during backward
-        K_snap = self._buf.keys.detach().clone()                  # (B,slots,d_k)
-        V_snap = self._buf.vals.detach().clone()                  # (B,slots,d_v)
-        H_snap = self._heb.H.detach().clone()                     # (B,d_k,d_v)
+        # ======== RECALL FIRST FROM DETACHED BUFFERS (no expensive clone) ========
+        K_snap = self._buf.keys.detach()    # (B,slots,d_k)
+        V_snap = self._buf.vals.detach()    # (B,slots,d_v)
+        H_snap = self._heb.H.detach()       # (B,d_k,d_v)
 
         c = F.normalize(k, dim=-1)                                # (B,d_k)
 
         # episodic recall (optionally windowed)
         if self.mem_read_window is not None:
-            Kw = K_snap[:, -self.mem_read_window:, :]
-            Vw = V_snap[:, -self.mem_read_window:, :]
+            Kw = K_snap[:, -self.mem_read_window:, :]            # (B,W,d_k)
+            Vw = V_snap[:, -self.mem_read_window:, :]            # (B,W,d_v)
         else:
             Kw, Vw = K_snap, V_snap
 
@@ -101,12 +106,12 @@ class CRSDCell(nn.Module):
         alpha_att = F.softmax(sims, dim=-1)                       # (B,W)
         v_buf = torch.einsum('bw,bwd->bd', alpha_att, Vw)         # (B,d_v)
 
-        # hebbian recall from snapshot
+        # hebbian recall
         v_hebb = torch.einsum('bkd,bk->bd', H_snap, c)            # (B,d_v)
 
         v_hat = 0.5 * v_buf + 0.5 * v_hebb                        # (B,d_v)
 
-        # gating
+        # gating and fusion
         g_in = torch.cat([h_prev, r_new, c, v_hat], dim=-1)
         g = torch.sigmoid(self.gate_in(g_in))
         chi = self.recall_map(v_hat)
@@ -115,6 +120,7 @@ class CRSDCell(nn.Module):
         # ======== THEN UPDATE LIVE MEMORIES (after recall) ========
         if train_mode and (step % self.mem_update_every == 0):
             with torch.no_grad():
+                # write detached k and v (avoid changing their requires_grad)
                 self._buf.write(k.detach(), v.detach())
                 self._heb.update(k.detach(), v.detach())
 
