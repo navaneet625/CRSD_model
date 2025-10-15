@@ -5,19 +5,16 @@ import torch.nn as nn
 import torch.optim as optim
 import yaml
 import sys
-import importlib
+import importlib 
 
 # local imports
 from data.dataloader import get_loaders
 from models.crsd_seq import CRSDSequence
 from utils.config import load_config
 from utils.metrics import accuracy_from_logits, bits_per_char, perplexity
+import torch
+torch._dynamo.config.capture_scalar_outputs = True
 
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-# ============================================================
-# ⚙️  Evaluation Loop
-# ============================================================
 @torch.no_grad()
 def evaluate(model, data_loader, loss_fn, device, use_amp=False):
     model.eval()
@@ -51,9 +48,16 @@ def evaluate(model, data_loader, loss_fn, device, use_amp=False):
     }
 
 
-# ============================================================
-# 🧠  Main Training Function
-# ============================================================
+def validate_config(cfg):
+    m = cfg["model"]
+    assert m["d_x"] > 0 and m["d_h"] > 0, "d_x and d_h must be > 0"
+    assert sum(m["res_dims"]) <= m["d_h"], "sum(res_dims) should not exceed d_h"
+    assert m["d_k"] == m["d_h"], "d_k should match d_h for best stability"
+    print("*"*60)
+    print(f"[Config OK] R={sum(m['res_dims'])}, d_h={m['d_h']}, d_k={m['d_k']}, d_v={m['d_v']}")
+    print("*"*60)
+
+
 def train():
     project_root = os.path.dirname(os.path.abspath(__file__))
     config_path = os.path.join(project_root, "experiments", "exp_language_model.yaml")
@@ -112,10 +116,21 @@ def train():
         except Exception:
             vocab_size = 50000
 
+
+    validate_config(cfg)
+
     model = CRSDSequence(
         vocab_size=vocab_size,
-        emb_dim=model_cfg.get("d_x", 256),
-        **model_cfg,
+        emb_dim=model_cfg["emb_dim"],
+        d_x=model_cfg["d_x"],
+        d_h=model_cfg["d_h"],
+        res_dims=model_cfg["res_dims"],
+        d_k=model_cfg["d_k"],
+        d_v=model_cfg["d_v"],
+        mem_slots=model_cfg["mem_slots"],
+        hebbian_topk=model_cfg.get("hebbian_topk", 16),
+        episodic_topk=model_cfg.get("episodic_topk", 8),
+        auto_write=model_cfg.get("auto_write", True),
     ).to(device)
 
     # -------------------------

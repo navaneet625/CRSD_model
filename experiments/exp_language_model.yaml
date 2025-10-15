@@ -1,25 +1,37 @@
-# ===============================================
-# ⚡ CRSD Optimized Configuration for 10MB Text
-# Balanced for stability and reasonable runtime
-# ===============================================
+# 🧮 Dimensional Relationships (for quick tuning reference)
+# ---------------------------------------------------------------
+# sum(res_dims) ≈ d_h                     # reservoir capacity ≈ hidden state size
+# d_h ≈ 2 × d_x                           # hidden width ~ 2x input dim
+# d_k = d_h                               # memory key space matches hidden space
+# d_v ≈ (0.25–0.5) × d_h                  # memory value is smaller for efficiency
+# hebbian_topk ≈ (0.25) × d_v             # top-k recall sparsity for Hebbian mem
+# episodic_topk ≈ (0.5) × hebbian_topk    # episodic recall even sparser
+# mem_slots ∈ [64, 512]                   # total memory capacity range
+# ---------------------------------------------------------------
 
 model:
-  d_x: 128          # embedding dimension
-  d_h: 256          # hidden size
-  res_dims: [64, 64, 64]   # deeper residual structure
-  d_k: 64           # key dimension
-  d_v: 64           # value dimension
-  mem_slots: 256    # memory slots for recall (larger for longer context)
+  emb_dim: 256
+  d_x: 256
+  d_h: 512
+  res_dims: [128, 128, 256]
+  d_k: 512
+  d_v: 128
+  mem_slots: 256
+  hebbian_topk: 32
+  episodic_topk: 16
 
 train:
-  batch_size: 128       # fits in GPU memory comfortably
-  lr: 0.0003           # slightly higher learning rate
-  epochs: 10            # enough to converge on 10MB
-  grad_clip: 1.0
-  checkpoint_every: 1  # save every epoch
+  batch_size: 32
+  lr: 0.0003  
+  epochs: 25 
+  grad_clip: 1.0  
+  checkpoint_every: 5
+  betas: [0.9, 0.98] 
+  dropout: 0.1 
+  scheduler: cosine 
 
 data:
-  dataset_path: "/data/enwik8_10M.txt"
-  max_len: 512         # character context length
-  num_workers: 2
-  data_mode: char
+  dataset_path: "/CRSD_model/data/enwik8_10M.txt"
+  max_len: 256   
+  num_workers: 4 
+  data_mode: char 

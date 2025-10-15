@@ -4,34 +4,29 @@ from .crsd_cell import CRSDCell
 
 class CRSDBlock(nn.Module):
     """
-    Batched (B,T,*) interface. Keeps loop over time (recurrent),
-    but fuses per-step ops and avoids Python loops over reservoirs.
+    - Processes entire sequences per layer in parallel
+    - Compatible with torch.compile, JIT, and AMP
     """
-    def __init__(self, cell_ctor=CRSDCell, layers=1, d_x=None, d_h=None, **kwargs):
+
+    def __init__(self, cell_ctor=CRSDCell, layers=6, d_x=None, d_h=None, **kwargs):
         super().__init__()
-        self.layers = nn.ModuleList([
-            cell_ctor(d_x=d_x, d_h=d_h, **kwargs) for _ in range(layers)
-        ])
-    def forward(self, x_seq, train_mode=True):
-        # x_seq: (B,T,d_x)
-        B, T, d_x = x_seq.shape
-        h = None
-        r = None
+        self.layers = nn.ModuleList()
+        for i in range(layers):
+            in_dim = d_x if i == 0 else d_h
+            self.layers.append(cell_ctor(d_x=in_dim, d_h=d_h, **kwargs))
 
-        for layer, cell in enumerate(self.layers):
-            # init states per layer
-            if h is None:
-                d_h = cell.d_h
-                h = x_seq.new_zeros(B, d_h)
-            else:
-                h = h.detach().zero_()  # reinit per layer
+    def forward(self, x_seq: torch.Tensor, train_mode: bool = True) -> torch.Tensor:
+        """
+        Args:
+            x_seq (Tensor): (B, T, d_x)
+            train_mode (bool): controls memory recall/write and dropout behavior
+        Returns:
+            Tensor: (B, T, d_h)
+        """
+        for i, cell in enumerate(self.layers):
+            cell.train(mode=train_mode)
+            # call the parallel forward (FFT + memory) per layer
+            h_out, _ = cell(x_seq, train_mode=train_mode)
+            x_seq = h_out
 
-            r = x_seq.new_zeros(B, cell.R)
-
-            outs = []
-            for t in range(T):
-                h, r = cell(x_seq[:, t, :], h, r, step=t, train_mode=train_mode)
-                outs.append(h)
-
-            x_seq = torch.stack(outs, dim=1)  # (B,T,d_h)
         return x_seq
