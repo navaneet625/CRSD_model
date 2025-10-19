@@ -21,20 +21,10 @@ class TextDataset(Dataset):
             from .prepare_data import SENTS
             raw_text = "\n".join(SENTS)
 
-        # Debug: show first few lines of raw text
-        print("📝 Sample raw text (first 3 lines):")
-        print("\n".join(raw_text.splitlines()[:3]))
-
         # Encode
         encoded_data = self.tok.encode(raw_text, add_special_tokens=False)
         print(f"🔢 Encoded data length: {len(encoded_data)} tokens")
 
-        # Debug: show first few token IDs and decoded version
-        print("🧩 Sample tokens (first 30):", encoded_data[:30])
-        try:
-            print("🔤 Decoded sample:", self.tok.decode(encoded_data[:50]))
-        except Exception as e:
-            print("⚠️ Decode error:", e)
 
         self.block_size = self.max_len
         self.data_blocks = []
@@ -91,17 +81,5 @@ def get_loaders(batch_size=8, max_len=1024, dataset_path=None, num_workers=4, mo
     val_loader = DataLoader(val_ds, **{**loader_kwargs, "shuffle": False})
 
     print(f"✅ DataLoaders ready | Train batches: {len(train_loader)}, Val batches: {len(val_loader)} | Batch size: {batch_size}")
-
-    # 🔍 Debug: show a few sample batches
-    print("\n🔍 Checking sample batches from train_loader:")
-    for i, (X, Y) in enumerate(train_loader):
-        print(f"Batch {i+1} → X shape: {X.shape}, Y shape: {Y.shape}")
-        try:
-            sample_decoded = ds.tok.decode(X[0].tolist()[:50])
-            print(f"🧠 Decoded X[0][:50]: {sample_decoded}")
-        except Exception as e:
-            print("⚠️ Decode error in batch sample:", e)
-        if i >= 1:
-            break  # only print 2 batches
 
     return train_loader, val_loader, ds.tok

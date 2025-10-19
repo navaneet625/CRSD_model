@@ -1,6 +1,5 @@
 import torch
 import torch.nn.functional as F
-from utils.memory_utils import normalize
 from utils.eval_utils import bits_per_char, perplexity, accuracy_from_logits
 
 def evaluate(model, dataloader, task_type="lm"):

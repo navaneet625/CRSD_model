@@ -34,12 +34,6 @@ class LLMTokenizer:
 
             vocab = self.tokenizer.get_vocab()
             self.inv = {v: k for k, v in vocab.items()}
-
-            # Debug info
-            print(f"📘 Loaded vocab size: {len(vocab)}")
-            print("🔢 Sample tokens:", list(vocab.items())[:10])
-            print(f"🆔 Special IDs → PAD: {self.tokenizer.pad_token_id}, BOS: {self.tokenizer.bos_token_id}, EOS: {self.tokenizer.eos_token_id}")
-
         else:
             print("⚠️ Tokenizer not loaded. Must be trained first.")
 
@@ -79,21 +73,16 @@ class LLMTokenizer:
         self.inv = {v: k for k, v in self.tokenizer.get_vocab().items()}
         self.vocab_file = save_path
 
-        print("📘 Reloaded tokenizer and verified special token IDs.")
-        print(f"🆔 PAD={self.tokenizer.pad_token_id}, BOS={self.tokenizer.bos_token_id}, EOS={self.tokenizer.eos_token_id}")
-
     def encode(self, text, add_special_tokens=True):
         if not self.tokenizer:
             raise ValueError("Tokenizer not initialized. Train or load first.")
         ids = self.tokenizer.encode(text, add_special_tokens=add_special_tokens)
-        print(f"🧩 [DEBUG] Encoding sample: '{text[:50]}...' → {ids[:20]}")
         return ids
 
     def decode(self, ids):
         if not self.tokenizer:
             raise ValueError("Tokenizer not initialized. Train or load first.")
         text = self.tokenizer.decode(ids, skip_special_tokens=True)
-        print(f"🔡 [DEBUG] Decoding sample IDs {ids[:20]} → '{text[:80]}'")
         return text
 
     def vocab_size(self):
