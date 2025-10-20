@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.optim as optim
 import yaml
 import sys
+import pickle
 
 from data.dataloader import get_loaders
 from models.crsd_seq import CRSDSequence
@@ -18,7 +19,6 @@ torch._dynamo.config.capture_scalar_outputs = True
 def evaluate(model, data_loader, loss_fn, device, use_amp=False):
     model.eval()
     total_loss, total_acc, count = 0.0, 0.0, 0
-
     for X, Y in data_loader:
         X, Y = X.to(device), Y.to(device)
         with torch.amp.autocast(device_type=device.type, enabled=use_amp):
@@ -40,38 +40,8 @@ def evaluate(model, data_loader, loss_fn, device, use_amp=False):
     }
 
 
-# ---------------- HELPERS ----------------
-def validate_config(cfg):
-    m = cfg["model"]
-    assert m["d_x"] > 0 and m["d_h"] > 0
-    assert m["ssm_N"] > 0 and m["ssm_N"] <= m["d_h"]
-    assert "rank_kcm" in m
-    print("*" * 60)
-    print(
-        f"[Config OK] SSM_N={m['ssm_N']}, d_h={m['d_h']}, "
-        f"d_k={m['d_k']}, d_v={m['d_v']}, rank_kcm={m['rank_kcm']}"
-    )
-    print("*" * 60)
-
-
 def _unwrap(model):
     return model.module if hasattr(model, "module") else model
-
-
-def one_pass_debug_trace(model, x, device):
-    """Print diagnostic info for KCM memory."""
-    m = _unwrap(model)
-    print("🔎 One-pass debug trace (first batch this epoch)")
-    with torch.no_grad():
-        _ = m(x[:1].to(device), train_mode=False)
-    if getattr(m, "kcm", None) is not None and getattr(m.kcm, "M", None) is not None:
-        M = m.kcm.M
-        W_phi = m.kcm.phi_proj.weight.detach()
-        print(
-            f"  KCM Global: M.shape={tuple(M.shape)} μ={float(M.mean()):.3e} "
-            f"σ={float(M.std()):.3e} | W_phi μ={float(W_phi.mean()):.3e} "
-            f"σ={float(W_phi.std()):.3e}"
-        )
 
 
 # ---------------- TRAIN ----------------
@@ -114,6 +84,19 @@ def train():
         vocab_size=data_cfg.get("vocab_size", 50000),
     )
     vocab_size = tok.vocab_size() if hasattr(tok, "vocab_size") else 50000
+    print(f"✅ Loaded data — vocab size: {vocab_size}")
+
+    # ✅ ADDED: Save tokenizer safely once
+    ckpt_dir = os.path.join(project_root, "checkpoints")
+    os.makedirs(ckpt_dir, exist_ok=True)
+    tokenizer_path = os.path.join(ckpt_dir, "tokenizer.pt")
+    torch.save({
+        "tokenizer": tok,
+        "vocab_size": vocab_size,
+        "data_mode": data_cfg.get("data_mode", "char"),
+        "created": time.strftime("%Y-%m-%d %H:%M:%S")
+    }, tokenizer_path)
+    print(f"✅ Tokenizer saved at: {tokenizer_path}")
 
     # Model
     model = CRSDSequence(
@@ -155,7 +138,6 @@ def train():
     grad_clip = train_cfg.get("grad_clip", 1.0)
     epochs = train_cfg.get("epochs", 10)
     ckpt_every = train_cfg.get("checkpoint_every", 1)
-    os.makedirs("checkpoints", exist_ok=True)
 
     print("🚀 Starting training...\n")
 
@@ -163,6 +145,7 @@ def train():
     for epoch in range(epochs):
         model.train()
         total_loss = 0.0
+        avg_loss = float('nan')
 
         print(f"\n🌙 Epoch {epoch + 1}/{epochs}")
         print("-" * 60)
@@ -203,16 +186,25 @@ def train():
             f"| Acc: {metrics['accuracy']:.3f} | BPC: {metrics['bpc']:.3f} | PPL: {metrics['ppl']:.3f}"
         )
 
-        # Checkpoint
+        # ✅ ADDED: Save checkpoint with memory_M + config + tokenizer info
         if (epoch + 1) % ckpt_every == 0:
-            ckpt_path = f"checkpoints/crsd_epoch{epoch + 1}.pt"
-            torch.save({
-                "model": _unwrap(model).state_dict(),
-                "opt": opt.state_dict(),
-                "scaler": scaler.state_dict(),
+            ckpt_path = os.path.join(ckpt_dir, f"crsd_epoch{epoch + 1:02d}.pt")
+            state = {
                 "epoch": epoch + 1,
-            }, ckpt_path)
-            print(f"💾 Saved checkpoint: {ckpt_path}")
+                "model_state": _unwrap(model).state_dict(),
+                "optimizer_state": opt.state_dict(),
+                "scaler_state": scaler.state_dict(),
+                "vocab_size": vocab_size,
+                "config": cfg,
+            }
+
+            # ✅ Save memory M from KCM if available
+            m = _unwrap(model)
+            if hasattr(m, "kcm") and hasattr(m.kcm, "M"):
+                state["memory_M"] = m.kcm.M.detach().cpu()
+
+            torch.save(state, ckpt_path)
+            print(f"💾 Checkpoint saved: {ckpt_path}")
 
     print("\n✅ Training complete! 🚀")
 

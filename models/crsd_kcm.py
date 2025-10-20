@@ -29,12 +29,26 @@ class KCMemory(nn.Module):
 
     # ----------------------------------------------------------------------
     @torch.no_grad()
-    def parallel_update(self, keys: torch.Tensor, values: torch.Tensor):
+    def parallel_update(self, keys: torch.Tensor, values: torch.Tensor,
+                        mu: float = 0.02, tau: float = 5.0):
+        """
+        Stable memory update using Oja-style normalized Hebbian rule with soft decay.
+        keys:  (T, d_k)
+        values:(T, d_v)
+        """
         keys, values = keys.to(self.dtype), values.to(self.dtype)
-        phi = F.relu(self.phi_proj(keys))                  # (T, rank)
+        phi = F.relu(self.phi_proj(keys))          # (T, rank)
+        phi = phi / (phi.norm(p=2, dim=-1, keepdim=True) + 1e-6)
+        values = values / (values.norm(p=2, dim=-1, keepdim=True) + 1e-6)
         delta_M = torch.einsum('tr,tv->rv', phi, values)   # (rank, d_v)
-        M_new = (1 - self.lam) * self.M[0] + self.lam * delta_M
-        self.M.data.copy_(M_new.unsqueeze(0))
+        M = self.M[0]
+        M.mul_(1 - mu)                                    # decay (forget old info)
+        M.add_(self.lam * delta_M)                        # consolidated write
+        norm = M.norm(p='fro')
+        if norm > tau:
+            M.div_(norm / tau)
+        self.M.data.copy_(M.unsqueeze(0))
+
 
     # ----------------------------------------------------------------------
     def parallel_recall(self, keys: torch.Tensor) -> torch.Tensor:
