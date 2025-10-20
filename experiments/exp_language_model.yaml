@@ -1,79 +1,32 @@
 model:
-  # --- Core Dimensions ---
-  emb_dim: 256               # higher embedding dimension for full-scale dataset
-  d_x: 256                   # input projection dimension
-  d_h: 512                   # hidden size per layer
-  layers: 4                  # deeper network for long-context modeling
-  ssm_N: 256                 # internal SSM state size
-
-  # --- KCM Parameters ---
-  d_k: 128                   # key dimension
-  d_v: 128                   # value dimension
-  rank_kcm: 128              # low-rank memory capacity (larger for 100M)
-  kcm_consolidation_rate: 0.10
+  emb_dim: 96
+  d_x: 96
+  d_h: 192
+  layers: 2
+  ssm_N: 96
+  d_k: 96
+  d_v: 96
+  rank_kcm: 48
+  kcm_consolidation_rate: 0.05
   kcm_reduce: "sum"
-
-  # --- Flags and Regularization ---
-  use_rope: true             # positional encoding
-  auto_write: true           # enable live memory update
-  use_diag_A: true
-  res_dropout_p: 0.1         # moderate dropout for regularization
-  memory_dtype: "float32"
-
-train:
-  batch_size: 64             # 64 sequences per step (adjust for GPU RAM)
-  lr: 0.0003                 # tuned for Adam optimizer
-  epochs: 40                 # longer training (full 100M chars)
-  grad_clip: 1.0
-  checkpoint_every: 5        # save every 5 epochs
-  betas: [0.9, 0.98]
-  dropout: 0.1
-  scheduler: cosine          # cosine LR decay
-
-data:
-  dataset_path: "enwik8.txt" # full 100 MB dataset file
-  max_len: 256               # longer sequences for context modeling
-  num_workers: 4
-  data_mode: char
-  vocab_size: 256            # byte-level vocab
-
-
-
-
-model:
-  # --- Core Dimensions ---
-  emb_dim: 32                # smaller embedding for char-level task
-  d_x: 32                    # input dimension to first layer
-  d_h: 64                    # hidden size (was 128)
-  layers: 3                  # single CRSD layer for faster training
-  ssm_N: 32                  # smaller SSM state (was 64)
-
-  # --- KCM Parameters ---
-  d_k: 64                    # key dimension (smaller)
-  d_v: 32                    # value dimension
-  rank_kcm: 32               # low-rank memory (was 64)
-  kcm_consolidation_rate: 0.10
-  kcm_reduce: "sum"
-
-  # --- Flags and Regularization ---
   use_rope: true
   auto_write: true
   use_diag_A: true
-  res_dropout_p: 0.05        # lower dropout for small model
-  memory_dtype: "float32"    # safer and faster on MPS
+  res_dropout_p: 0.05
+  memory_dtype: "float32"
 
 train:
-  batch_size: 64            # smaller batch for MPS memory limits
-  lr: 0.0005                # slightly higher for faster convergence
-  epochs: 5
+  batch_size: 32
+  lr: 0.0001
+  epochs: 10
   grad_clip: 1.0
-  checkpoint_every: 1
+  checkpoint_every: 3
   betas: [0.9, 0.98]
   dropout: 0.05
   scheduler: cosine
 
 data:
-  dataset_path: "enwik8_10M.txt"  # smaller subset (~10M chars)
-  max_len: 128                    # shorter sequences for faster steps
+  dataset_path: "enwik8_10M.txt"
+  max_len: 128
   num_workers: 2
   data_mode: char

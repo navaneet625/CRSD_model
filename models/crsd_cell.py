@@ -1,8 +1,8 @@
-import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .crsd_kcm import KCMemory
+from .crsd_fusion import CRSDMemoryFusion
 
 def apply_rope_shared(x, sin, cos):
     """
@@ -83,6 +83,12 @@ class CRSDCell(nn.Module):
             debug=debug, kcm_consolidation_rate=kcm_consolidation_rate,
             kcm_soft_decay=0.0, kcm_reduce=kcm_reduce,
         )
+        
+        self.fusion_module = CRSDMemoryFusion(
+            d_h=self.d_h,
+            enable_similarity=False,
+            enable_attention=False 
+        )
 
         # Cached recurrent state (for stateful inference)
         self._last_h = None
@@ -154,8 +160,8 @@ class CRSDCell(nn.Module):
         
         h_mem_seq = self.recall_map(v_hat_seq)          # (B, T, d_h)
         mem_gate  = torch.sigmoid(self.mem_gate(y_ssm)) # (B, T, 1)
-        y_ssm     = y_ssm + mem_gate * h_mem_seq        # (B, T, d_h)
-        
+        y_ssm = self.fusion_module(y_ssm, h_mem_seq)
+
         # Parallel write per sample (vectorized over T)
         if train_mode and self.auto_write:
             with torch.no_grad():
