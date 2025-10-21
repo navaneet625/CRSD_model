@@ -3,9 +3,8 @@ import time
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import yaml
 import sys
-import pickle
+import torch.nn.functional as F
 
 from data.dataloader import get_loaders
 from models.crsd_seq import CRSDSequence
@@ -14,7 +13,7 @@ from utils.metrics import accuracy_from_logits, bits_per_char, perplexity
 
 torch._dynamo.config.capture_scalar_outputs = True
 
-# ---------------- EVAL ----------------
+
 @torch.no_grad()
 def evaluate(model, data_loader, loss_fn, device, use_amp=False):
     model.eval()
@@ -22,14 +21,14 @@ def evaluate(model, data_loader, loss_fn, device, use_amp=False):
     for X, Y in data_loader:
         X, Y = X.to(device), Y.to(device)
         with torch.amp.autocast(device_type=device.type, enabled=use_amp):
-            logits = model(X, train_mode=False)
+            out = model(X, train_mode=False)
+            logits = out if isinstance(out, torch.Tensor) else out[0]
             B, Tm1, V = logits.shape
             loss = loss_fn(logits.view(B * Tm1, V), Y.view(B * Tm1))
         acc = accuracy_from_logits(logits, Y)
         total_loss += loss.item()
         total_acc += acc
         count += 1
-
     avg_loss = total_loss / max(1, count)
     avg_acc = total_acc / max(1, count)
     return {
@@ -44,7 +43,17 @@ def _unwrap(model):
     return model.module if hasattr(model, "module") else model
 
 
-# ---------------- TRAIN ----------------
+def _get_kcm(module):
+    if hasattr(module, "kcm"):
+        return module.kcm
+    if hasattr(module, "cell") and hasattr(module.cell, "_kcm"):
+        return module.cell._kcm
+    for m in module.modules():
+        if hasattr(m, "M") and isinstance(getattr(m, "M"), torch.Tensor):
+            return m
+    return None
+
+
 def train():
     project_root = os.path.dirname(os.path.abspath(__file__))
     config_path = os.path.join(project_root, "experiments", "exp_language_model.yaml")
@@ -53,18 +62,11 @@ def train():
         print("⚠️ Could not find config file. Exiting.")
         sys.exit(1)
 
-    # Load config
-    try:
-        cfg = load_config(config_path)
-    except Exception:
-        with open(config_path) as f:
-            cfg = yaml.safe_load(f)
-
+    cfg = load_config(config_path)
     model_cfg = cfg.get("model", {})
     train_cfg = cfg.get("train", {})
     data_cfg = cfg.get("data", {})
 
-    # Device
     device = torch.device(
         "cuda" if torch.cuda.is_available()
         else "mps" if torch.backends.mps.is_available()
@@ -73,7 +75,6 @@ def train():
     print(f"💻 Using device: {device}")
     use_amp = device.type == "cuda"
 
-    # Data
     dataset_path = os.path.join(project_root, "data", data_cfg.get("dataset_path", "text.txt"))
     train_loader, val_loader, tok = get_loaders(
         batch_size=train_cfg.get("batch_size", 64),
@@ -86,7 +87,6 @@ def train():
     vocab_size = tok.vocab_size() if hasattr(tok, "vocab_size") else 50000
     print(f"✅ Loaded data — vocab size: {vocab_size}")
 
-    # ✅ ADDED: Save tokenizer safely once
     ckpt_dir = os.path.join(project_root, "checkpoints")
     os.makedirs(ckpt_dir, exist_ok=True)
     tokenizer_path = os.path.join(ckpt_dir, "tokenizer.pt")
@@ -94,11 +94,10 @@ def train():
         "tokenizer": tok,
         "vocab_size": vocab_size,
         "data_mode": data_cfg.get("data_mode", "char"),
-        "created": time.strftime("%Y-%m-%d %H:%M:%S")
+        "created": time.strftime("%Y-%m-%d %H:%M:%S"),
     }, tokenizer_path)
     print(f"✅ Tokenizer saved at: {tokenizer_path}")
 
-    # Model
     model = CRSDSequence(
         vocab_size=vocab_size,
         emb_dim=model_cfg["emb_dim"],
@@ -119,16 +118,16 @@ def train():
         max_len=data_cfg.get("max_len", 256),
     ).to(device)
 
-    # Multi-GPU
     if torch.cuda.device_count() > 1 and device.type == "cuda":
         print(f"🧩 Using DataParallel over {torch.cuda.device_count()} GPUs")
         model = nn.DataParallel(model)
 
-    # Optimizer & Loss
-    opt = optim.Adam(model.parameters(),
-                     lr=train_cfg.get("lr", 3e-4),
-                     betas=train_cfg.get("betas", [0.9, 0.98]))
-    loss_fn = nn.CrossEntropyLoss()
+    opt = optim.Adam(
+        model.parameters(),
+        lr=train_cfg.get("lr", 3e-4),
+        betas=train_cfg.get("betas", [0.9, 0.98]),
+    )
+    ce_loss_fn = nn.CrossEntropyLoss()
 
     try:
         scaler = torch.amp.GradScaler(device_type=device.type, enabled=use_amp)
@@ -141,11 +140,13 @@ def train():
 
     print("🚀 Starting training...\n")
 
-    # ---------------- MAIN LOOP ----------------
+    # Weighted coefficients for custom CRSD multi-loss
+    α, β, γ = 0.05, 0.1, 0.05  # (state, memory, total regularization)
+
     for epoch in range(epochs):
         model.train()
         total_loss = 0.0
-        avg_loss = float('nan')
+        avg_loss = float("nan")
 
         print(f"\n🌙 Epoch {epoch + 1}/{epochs}")
         print("-" * 60)
@@ -154,9 +155,31 @@ def train():
             X, Y = X.to(device), Y.to(device)
 
             with torch.amp.autocast(device_type=device.type, enabled=use_amp):
-                logits = model(X, train_mode=True)
+                logits, k_batch, v_batch = model(X, train_mode=True)
                 B, Tm1, V = logits.shape
-                loss = loss_fn(logits.view(B * Tm1, V), Y.view(B * Tm1))
+
+                # 1️⃣ CrossEntropy loss
+                ce_loss = ce_loss_fn(logits.view(B * Tm1, V), Y.view(B * Tm1))
+
+                # 2️⃣ Memory reconstruction loss
+                m = _unwrap(model)
+                kcm = _get_kcm(m)
+                mem_loss = 0.0
+                if kcm is not None:
+                    v_hat = kcm.batch_recall(k_batch)
+                    mem_loss = 1 - F.cosine_similarity(v_hat, v_batch, dim=-1).mean()
+
+
+
+                # total hybrid loss
+                # loss = ce_loss + α * state_loss + β * mem_loss
+                loss = ce_loss  + β * mem_loss
+                # loss = ce_loss
+                print()
+                print("mem_loss: ", mem_loss)
+                print()
+
+                # print("ce_loss: ",ce_loss," state_loss: ",state_loss, "mem_loss: ",mem_loss)
 
             opt.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
@@ -164,29 +187,34 @@ def train():
             if grad_clip:
                 scaler.unscale_(opt)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-
             scaler.step(opt)
             scaler.update()
+
+            with torch.no_grad():
+                if kcm is not None:
+                    k_batch_det = k_batch.detach().cpu() if k_batch.device != torch.device('cpu') else k_batch.detach()
+                    v_batch_det = v_batch.detach().cpu() if v_batch.device != torch.device('cpu') else v_batch.detach()
+                    kcm.batch_update(k_batch_det.to(kcm.M.device).to(kcm.M.dtype),
+                                     v_batch_det.to(kcm.M.device).to(kcm.M.dtype))
+
 
             total_loss += loss.item()
             avg_loss = total_loss / (batch_idx + 1)
             progress = (batch_idx + 1) / len(train_loader) * 100
             sys.stdout.write(
                 f"\r🧩 Step [{batch_idx + 1}/{len(train_loader)}] "
-                f"({progress:6.2f}%) | Loss: {loss.item():.4f} | "
-                f"Avg: {avg_loss:.4f}"
+                f"({progress:6.2f}%) | Loss: {loss.item():.4f} | Avg: {avg_loss:.4f}"
             )
             sys.stdout.flush()
 
         print()
-        metrics = evaluate(model, val_loader, loss_fn, device, use_amp)
+        metrics = evaluate(model, val_loader, ce_loss_fn, device, use_amp)
         eval_loss = metrics["loss"]
         print(
             f"🌀 Epoch {epoch + 1}/{epochs} | Train: {avg_loss:.4f} | Eval: {eval_loss:.4f} "
             f"| Acc: {metrics['accuracy']:.3f} | BPC: {metrics['bpc']:.3f} | PPL: {metrics['ppl']:.3f}"
         )
 
-        # ✅ ADDED: Save checkpoint with memory_M + config + tokenizer info
         if (epoch + 1) % ckpt_every == 0:
             ckpt_path = os.path.join(ckpt_dir, f"crsd_epoch{epoch + 1:02d}.pt")
             state = {
@@ -197,12 +225,8 @@ def train():
                 "vocab_size": vocab_size,
                 "config": cfg,
             }
-
-            # ✅ Save memory M from KCM if available
-            m = _unwrap(model)
-            if hasattr(m, "kcm") and hasattr(m.kcm, "M"):
-                state["memory_M"] = m.kcm.M.detach().cpu()
-
+            if kcm is not None and hasattr(kcm, "M"):
+                state["memory_M"] = kcm.M.detach().cpu()
             torch.save(state, ckpt_path)
             print(f"💾 Checkpoint saved: {ckpt_path}")
 
