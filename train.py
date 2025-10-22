@@ -141,7 +141,7 @@ def train():
     print("🚀 Starting training...\n")
 
     # Weighted coefficients for custom CRSD multi-loss
-    α, β, γ = 0.05, 0.1, 0.05  # (state, memory, total regularization)
+    α, β = 0.05, 0.1  # (state, memory, total regularization)
 
     for epoch in range(epochs):
         model.train()
@@ -155,31 +155,33 @@ def train():
             X, Y = X.to(device), Y.to(device)
 
             with torch.amp.autocast(device_type=device.type, enabled=use_amp):
-                logits, k_batch, v_batch = model(X, train_mode=True)
+                # 1. Normal forward
+                logits, h_seq, k_batch, v_batch = model(X, train_mode=True)
                 B, Tm1, V = logits.shape
-
-                # 1️⃣ CrossEntropy loss
                 ce_loss = ce_loss_fn(logits.view(B * Tm1, V), Y.view(B * Tm1))
 
-                # 2️⃣ Memory reconstruction loss
                 m = _unwrap(model)
                 kcm = _get_kcm(m)
                 mem_loss = 0.0
+
+                
+                #2. Memory reconstruction (learn better keys/values)
                 if kcm is not None:
                     v_hat = kcm.batch_recall(k_batch)
                     mem_loss = 1 - F.cosine_similarity(v_hat, v_batch, dim=-1).mean()
+                
+                # 3. Optional contrastive or sparsity loss
+                neg = v_batch[torch.randperm(v_batch.size(0))]
+                contrastive = F.relu(0.2 - (F.cosine_similarity(v_hat, v_batch) -
+                                            F.cosine_similarity(v_hat, neg))).mean()
 
-
-
-                # total hybrid loss
-                # loss = ce_loss + α * state_loss + β * mem_loss
-                loss = ce_loss  + β * mem_loss
-                # loss = ce_loss
-                print()
-                print("mem_loss: ", mem_loss)
-                print()
-
-                # print("ce_loss: ",ce_loss," state_loss: ",state_loss, "mem_loss: ",mem_loss)
+                state_smooth = F.mse_loss(h_seq[:, 1:], h_seq[:, :-1].detach())
+                state_energy = (h_seq ** 2).mean()
+                state_loss = state_smooth + 0.1 * state_energy
+                
+                # 4. Combined loss
+                loss = ce_loss + α * state_loss + β * (mem_loss + 0.5 * contrastive)
+        
 
             opt.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()

@@ -137,7 +137,7 @@ class CRSDSequence(nn.Module):
                 k, v = k_all[-1], v_all[-1]
             else:
                 k, v = k_all, v_all
-            return logits, k, v
+            return logits,h_seq ,k, v
         else:
-            return logits, None, None
+            return logits,h_seq, None, None
 
