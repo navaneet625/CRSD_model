@@ -1,94 +1,153 @@
-# CRSD Minimal Repo
+# CRSD Minimal Repository
 
-Minimal implementation of the Cue-Revival State Dynamics (CRSD) prototype.
+**Minimal implementation of the Cue-Revival State Dynamics (CRSD) prototype.**
 
-Run a tiny demo:
+---
+
+## 🚀 Demo: Quick Start
+
+Clone the repo and run a tiny experiment:
 
 ```bash
+git clone https://github.com/navaneet625/CRSD_model.git
+cd CRSD_model
 python train.py --config experiments/exp_crsd_tiny.yaml
+```
 
+---
 
+## 🔍 Core Features
 
-🔍 Core Features
+- **🧩 Modular Architecture**  
+  Clean directory structure (`models/`, `data/`, `utils/`, `scripts/`), facilitating reproducible experiments.
 
-🧩 Modular Architecture – clean directory structure (models/, data/, utils/, scripts/) for reproducible experiments.
+- **🔡 Tokenization System**  
+  Supports character, word, and subword modes using custom tokenizers:
+  - Byte-level
+  - Word
+  - SentencePiece
 
-🔡 Tokenization System – supports character, word, and subword modes using custom tokenizers (Byte-level, Word, SentencePiece).
+- **⚙️ Dataset Pipeline**  
+  Robust dataloader handles large-scale text corpora (e.g., `enwik8_10M.txt`).  
+  Supports automatic data splitting, padding, and batching.
 
-⚙️ Dataset Pipeline – robust dataloader for large-scale text corpora (e.g. enwik8_10M.txt), automatically splits, pads, and batches sequences.
+- **📈 Training Loop**  
+  Complete training & evaluation pipeline:
+  - Gradient scaling
+  - Checkpointing
+  - Metrics: Loss, Accuracy, Bits-Per-Character, Perplexity
 
-📈 Training Loop – full training + evaluation pipeline with gradient scaling, checkpointing, and metrics (Loss, Accuracy, Bits-Per-Character, Perplexity).
+- **🧠 Research Focus**  
+  Designed for rapid experimentation with modern State Space Model (SSM) families:
+  - S4, S4D, S5, Mamba, LinOSS, Samba
+  - RetNet-inspired decoders
 
-🧠 Research Focus – designed for experimenting with modern SSM families: S4, S4D, S5, Mamba, LinOSS, Samba, and RetNet-inspired decoders.
+- **🔬 Debug-Friendly**  
+  Inspection tools for tracing tokenization, data flow, model structure
+  - Detects silent data corruption (e.g., PAD flooding)
+  - Detailed print/debug modes
 
-🔬 Debug-Friendly – detailed print and inspection tools to trace tokenization, data flow, and model structure (detects silent data corruption, e.g. PAD flooding).
+---
+## 🏛️ Dual Memory Subsystems
 
+### HebbianMemory
 
-HebbianMemory(B, d_k, d_v)
+A differentiable associative memory storing feature correlations in a dynamic matrix `H` of shape `(B, d_k, d_v)`.
 
-Implements a differentiable associative memory that stores feature correlations 
-in a dynamic matrix H ∈ ℝ^{B×d_k×d_v}. Each update reinforces associations 
-between keys (k) and values (v) using Hebbian plasticity rules:
+**Update rule:**  
+```
+H <- gamma * H + eta * outer(k, v)
+```
+Where:
+- `gamma` is a learnable decay parameter  
+- `eta` is a learnable learning rate  
+- `outer(k, v)` denotes the outer product between key `k` and value `v`
 
-    H ← γH + η·(k⊗v)
-
-At recall, given a query c, it retrieves the most relevant value using 
-cosine-normalized similarity with optional top-k sparsification.
-
-Features:
-- Cosine-normalized recall for numerical stability
-- Learnable decay (γ) and learning rate (η)
+**Features:**
+- Cosine-normalized recall for stability
+- Learnable decay (`gamma`) and learning rate (`eta`)
 - Optional top-k selective recall
-- Detach-safe memory (can disable gradient flow through memory)
-- AMP / mixed-precision friendly
+- Detach-safe memory (can disable gradient flow)
+- Mixed-precision / AMP-friendly
 
+---
 
-EpisodicBuffer(B, slots, d_k, d_v)
+### EpisodicBuffer
 
-Implements a priority-based episodic memory that stores the most important 
-(key, value) pairs over time, replacing the lowest-importance entries when full. 
-It supports differentiable cosine-based retrieval, allowing global sequence 
-context recall over recent history.
+A prioritized, slot-based episodic memory. Retains important `(key, value)` pairs and replaces least important when full.
 
-Features:
-- Vectorized priority write (replace lowest-importance slot)
+**Features:**
+- Vectorized priority writing (replace lowest-importance slot)
 - Cosine similarity recall with temperature scaling
 - Optional top-k or window-limited recall
-- Stable normalization with eps guards
-- Fully differentiable (detach_mem=False)
-- Efficient for large batch or slot counts (AMP-compatible)
+- Stable normalization (with epsilon for numerical safety)
+- Fully differentiable
+- Efficient for large batch or slot counts (AMP compatible)
+---
 
+## 🧠 Model Summary: Contextual Recurrent Spectral Dual-Memory (CRSD)
 
-🧠 Theoretical Model Summary — CRSD: Contextual Recurrent Spectral Dual-Memory Model
+**CRSD = Contextual Recurrent Spectral Dual-Memory**
 
-The CRSD architecture (Contextual Recurrent Spectral Dual-memory) is a hybrid neural sequence model designed to combine the temporal sensitivity of recurrent networks, the global mixing efficiency of spectral transforms, and the adaptive recall capacity of biologically inspired memory systems.
+A hybrid neural sequence model combining:
 
-At its core, each CRSD cell integrates three complementary computational pathways:
+1. **Recurrent Reservoir Dynamics**  
+   Continuous-time, parameterized updates mixing current input, previous hidden state, and an internal reservoir for fine-grained temporal modeling (efficient local recurrence).
 
-Recurrent Reservoir Dynamics —
-A continuous-time update mechanism combines the current input, previous hidden state, and an internal “reservoir” representation through parameterized linear transformations.
-This enables fine-grained temporal modeling with efficient local recurrence, preserving short-term dependencies.
+2. **Spectral Dual Transform**  
+   Each hidden state passes through LayerNorm → FFT → iFFT → Linear, enabling efficient, global mixing in the frequency domain:
+   - O(d log d) complexity
+   - Gradient- and energy-preserving (unitary)
 
-Spectral Dual Transform (FFT-based A→B→A Mixing) —
-Each hidden activation undergoes a LayerNorm → FFT → iFFT → Linear sub-block that transforms feature activations into the frequency domain, performs low-cost global mixing, and returns to the time domain.
-This unitary (lossless) operation provides global context propagation across feature dimensions in O(d log d) complexity while maintaining gradient stability and energy preservation.
+3. **Dual-Memory Retrieval System**  
+   Two complementary memory modules:
+   - **Hebbian associative memory** for long-term key–value correlations:  
+     $$ H \leftarrow \gamma H + \eta (k \otimes v) $$
+   - **Episodic buffer** for recent/priority-based experience recall
+   - Both are queried and adaptively merged via a learnable gate for unified recall
 
-Dual-Memory Retrieval System —
-CRSD maintains two interacting memory subsystems:
+**Tri-domain Integration:**  
+- Time-domain recurrence (short-range)
+- Frequency-domain transform (global context)
+- Memory-domain retrieval (persistent knowledge)
 
-A Hebbian associative memory, which continuously integrates key–value correlations for long-term knowledge retention through the update rule
-H ← γH + η(k⊗v).
+_CRSD merges transformer-level expressivity with RNN-like efficiency and stability; suitable for language modeling, continual learning, and dynamic sequence reasoning._
 
-An Episodic buffer, a slot-based short-term store that retains recent experiences based on importance scores and priority-based replacement.
-Both memories are queried via normalized key vectors, producing context embeddings (v_hebb, v_buf) that are adaptively merged via a learnable gate into a unified recall vector (v̂_t).
+---
 
-The hidden state update is then gated by this composite recall signal, allowing each CRSD cell to dynamically blend local recurrence with global spectral mixing and contextual memory retrieval.
+## 📁 Directory Structure
 
-Formally, CRSD achieves a tri-domain integration:
-time-domain recurrence (short-range),
-frequency-domain transformation (global context),
-and memory-domain retrieval (persistent knowledge).
+```
+CRSD_model/
+│
+├── models/        # Model architectures (CRSDCell, memory modules, etc.)
+├── data/          # Data loaders, preprocessing, tokenization
+├── utils/         # Helper functions, training utilities
+├── scripts/       # Experiment scripts and entrypoints
+├── experiments/   # Experiment configs (YAML)
+├── train.py       # Training/evaluation loop
+└── README.md
+```
 
-This combination yields a model that scales efficiently to long sequences (O(T × d log d)), avoids gradient degradation through unitary spectral operations, and supports both online (recurrent) and offline (sequence-parallel) modes of processing.
+---
 
-In practice, CRSD exhibits transformer-level expressiveness with the efficiency and stability of RNNs, making it suitable for language modeling, continual learning, and dynamic sequence reasoning.
+## References
+- [Original S4 (Structured State Space Models)](https://arxiv.org/abs/2111.00396)
+- [Recurrent Memory Transformers](https://arxiv.org/abs/2206.07162)
+- [Frequency Domain Sequence Models](https://arxiv.org/abs/2301.12348)
+- [Mamba: Linear-time SSMs](https://github.com/state-spaces/mamba)
+- [RetNet: Retentive Networks](https://arxiv.org/abs/2307.08621)
+
+---
+
+## Contact
+
+For questions, suggestions, or collaborations:
+- GitHub: [navaneet625](https://github.com/navaneet625)
+- Issues & discussions: [GitHub Issues](https://github.com/navaneet625/CRSD_model/issues)
+
+---
+
+## 📄 License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
